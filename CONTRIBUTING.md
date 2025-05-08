@@ -30,7 +30,7 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md).
 * Radiant uses Bazel as the primary build system. Install Bazel
   ([official instructions][bazel.install]). [Bazelisk][bazel.bazelisk] is
   recommended.
-* Python is required for tooling. Install Python
+* Python (3.11+) is required for tooling. Install Python
   ([official instructions][python.install]).
 * Radiant uses python package to aid in the remaining setup and subsequent
   workflows. Install it into your python environment by running:
