@@ -19,7 +19,7 @@ additional information or guidance.
 
 ## Disclosure Policy
 
-When the Radiant team receives a security bug report, they will assign it to a
+When the Raditn team receives a security bug report, they will assign it to a
 primary developer. This person will coordinate the fix and release process,
 involving the following steps:
 
