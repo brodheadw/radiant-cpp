@@ -21,60 +21,39 @@
 
 namespace rad
 {
-/// @brief Exclusive ownership smart pointer analog.
-/// @details A move-only pointer wrapper that manages a single, heap-allocated
-/// object of type T, ensuring lifetime-based destruction without relying on
-/// external allocators or additional storage beyond one pointer.
-/// @tparam T the type of the object being owned.
+template <typename T, typename Deleter = DefaultDelete<T>>
 
-template <typename T, typename Deleter = void(*) (T*)>
-class UniquePtr
+class UniquePtr : private Deleter
 {
 public:
     RAD_NOT_COPYABLE(UniquePtr);
 
-    /// @brief Default deleter: plain delete.
-    static void DefaultDeleter(T* ptr) noexcept { delete ptr; }
-
     using pointer      = T*;
-    using deleter_type = Deleter;
 
-    /// @brief Default constructs to nullptr.
-    /// @details ctor is constexpr to allow for static initialization,
-    /// dtor is not constexpr to allow for custom deleters.
+    struct DefaultDelete
+    {
+        constexpr DefaultDelete() noexcept = default;
+        void operator()(T* p) const noexcept { delete p; }
+    };
+
     constexpr UniquePtr() noexcept
-      : m_ptr(nullptr), 
-        m_del(Deleter(DefaultDeleter))
+      : Deleter(), // empty base
+        m_ptr(nullptr)
     {}
 
-    /// @brief Constructs owning a raw pointer.
-    /// @param p 
-    /// @param d 
-    explicit constexpr UniquePtr(pointer p,
-                                 Deleter d = Deleter(DefaultDeleter)) noexcept
-      : m_ptr(p),
-        m_del(p)
+    explicit constexpr UniquePtr(pointer p, Deleter d = Deleter()) noexcept
+      : Deleter(std::move(d)),
+        m_ptr(p)
     {}
 
-    /// @brief Constructs from a raw pointer.
-    /// @details This constructor is constexpr to allow for static initialization.
-    /// @param p the raw pointer to take ownership of.
-    /// @param d the deleter to use for destruction.
-    /// @param alloc the allocator to use for allocation.
-    /// @param tag the tag to use for allocation.
-    /// @param size the size of the object to allocate.
-    /// @param alignment the alignment of the object to allocate.
-    /// @param args the arguments to pass to the constructor of the object.
     ~UniquePtr() noexcept
     {
-        if (m_ptr) m_del(m_ptr);
+        if (m_ptr) static_cast<Deleter&>(*this)(m_ptr);
     }
 
-    /// @brief Move ownership of object.
-    /// @details
     constexpr UniquePtr(UniquePtr&& o) noexcept
-      : m_ptr(o.m_ptr),
-        m_del(o.m_del)
+      : Deleter(std::move(o.get_deleter())),
+        m_ptr(o.m_ptr)
     {
         o.m_ptr = nullptr;
     }
@@ -83,9 +62,9 @@ public:
     {
         if (this != &o)
         {
-            if (m_ptr) m_del(m_ptr);
+            reset();
             m_ptr = o.m_ptr;
-            m_del = o.m_del;
+            get_deleter() = std::move(o.get_deleter());
             o.m_ptr = nullptr;
         }
         return *this;
@@ -107,7 +86,7 @@ public:
 
     void reset(pointer p = nullptr) noexcept
     {
-        if (m_ptr) m_del(m_ptr);
+        if (m_ptr) static_cast<Deleter&>(*this)(m_ptr);
         m_ptr = p;
     }
 
@@ -117,7 +96,7 @@ public:
     void swap(UniquePtr& o) noexcept
     {
         rad::Swap(m_ptr, o.m_ptr);
-        rad::Swap(m_del, o.m_del);
+        rad::Swap(get_deleter(), o.get_deleter());
     }
 
     constexpr Deleter&       get_deleter() noexcept { return m_del; }
@@ -125,10 +104,9 @@ public:
 
 private:
     pointer m_ptr;
-    Deleter m_del;
 };
 
 template <typename T>
-using UniquePtrDefault = UniquePtr<T, void(*) (T*)>;
+using UniquePtrDefault = UniquePtr<T>;
 
 } // namespace rad
