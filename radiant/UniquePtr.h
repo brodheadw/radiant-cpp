@@ -15,6 +15,7 @@
 #include "radiant/TotallyRad.h"
 #include "radiant/TypeTraits.h"
 #include "radiant/Utility.h"   // for rad::swap overload
+#include "radiant/detail/StdTypeTraits.h"
 #include <utility>             // std::move
 #include <cstddef>             // nullptr_t
 #include <algorithm>           // std::swap
@@ -22,10 +23,16 @@
 namespace rad
 {
 
-// Empty deleter type so it occupies no storage (EBO).
+/// @brief Empty deleter type so it occupies no storage (EBO).
 template <typename T>
 struct DefaultDelete {
     constexpr DefaultDelete() noexcept = default;
+
+    // Allow DefaultDelete<Base> to be constructed from DefaultDelete<Derived>
+    template <typename U,
+              rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
+    constexpr DefaultDelete(const DefaultDelete<U>&) noexcept {}
+
     void operator()(T* p) const noexcept { delete p; }
 };
 
@@ -47,24 +54,48 @@ public:
     {}
 
     /// @brief Constructs owning a raw pointer + optional custom deleter.
-    explicit constexpr UniquePtr(pointer p,
-                                 Deleter d = Deleter()) noexcept
+    explicit constexpr UniquePtr(pointer p, Deleter d = Deleter()) noexcept
       : Deleter(std::move(d)),
         m_ptr(p)
     {}
 
+    /// @brief  Constructs owning a raw pointer + optimal custom deleter.
+    template <class U, class E,
+              rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
+    constexpr UniquePtr(UniquePtr<U, E>&& o) noexcept
+      : Deleter(std::move(o.get_deleter())),
+        m_ptr(o.release())
+    {}
+
+    /// @brief Move-constructs, stealing ownership
+    constexpr UniquePtr(UniquePtr&& o) noexcept
+      : Deleter(std::move(o.get_deleter())),
+        m_ptr(o.release())
+    {
+        o.m_ptr = nullptr;
+    }
+    
     /// @brief Destroys the managed object if non-null.
     ~UniquePtr() noexcept
     {
         if (m_ptr) static_cast<Deleter&>(*this)(m_ptr);
     }
 
-    /// @brief Move-constructs, stealing ownership.
-    constexpr UniquePtr(UniquePtr&& o) noexcept
-      : Deleter(std::move(o.get_deleter())),
-        m_ptr(o.m_ptr)
+    /// @brief nullptr-assignment (clears the pointer)
+    UniquePtr& operator=(std::nullptr_t) noexcept
     {
-        o.m_ptr = nullptr;
+        reset();
+        return *this;
+    }
+
+    /// @brief Assigns a raw pointer, deleting the current one.
+    template <class U, class E,
+              rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
+    UniquePtr& operator=(UniquePtr<U, E>&& o) noexcept
+    {
+        reset(o.release());
+        get_deleter() = std::move(o.get_deleter());
+        return *this;
     }
 
     /// @brief Move-assigns, destroying current and stealing ownership.
@@ -80,7 +111,7 @@ public:
         return *this;
     }
 
-    // observers
+    // --- OBSERVERS ---
 
     /// @return the stored pointer (may be nullptr)
     constexpr pointer get() const noexcept { return m_ptr; }
@@ -94,7 +125,7 @@ public:
     /// @return true if get() != nullptr
     explicit constexpr operator bool() const noexcept { return m_ptr != nullptr; }
 
-    // modifiers
+    // --- MODIFIERS ---
 
     /// @brief Release ownership without deleting; returns previous pointer.
     pointer release() noexcept

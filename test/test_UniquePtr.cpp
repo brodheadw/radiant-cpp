@@ -48,6 +48,13 @@ TEST(UniquePtr, BasicLifetimeAndSize) {
   EXPECT_EQ(Foo::live, 0);
 }
 
+TEST (UniquePtr, NullptrAssignment) {
+  rad::UniquePtrDefault<int> p(new int{3});
+  EXPECT_TRUE(p);
+  p = nullptr;
+  EXPECT_FALSE(p);
+}
+
 TEST(UniquePtr, ReleaseAndReset) {
   Foo::live = 0;
   Foo* raw = new Foo{7};
@@ -95,6 +102,21 @@ TEST(UniquePtr, MoveSemantics) {
   // cleanup
   c.reset();
   EXPECT_EQ(Foo::live, 0);
+}
+
+struct Base { virtual ~Base() = default; };
+struct Derived : Base { int v = 9; };
+
+TEST(UniquePtr, ConvertingMove) {
+  rad::UniquePtr<Derived> d(new Derived{});
+  rad::UniquePtr<Base>    b(std::move(d));
+  EXPECT_TRUE(b);
+  EXPECT_FALSE(d);
+
+  rad::UniquePtr<Derived> d2(new Derived{});
+  b = std::move(d2);
+  EXPECT_TRUE(b);
+  EXPECT_FALSE(d2);
 }
 
 TEST(UniquePtr, Swap) {
