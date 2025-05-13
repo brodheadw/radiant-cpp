@@ -14,11 +14,10 @@
 
 #include "radiant/TotallyRad.h"
 #include "radiant/TypeTraits.h"
-#include "radiant/Utility.h"   // for rad::swap overload
-#include "radiant/detail/StdTypeTraits.h"
-#include <utility>             // std::move
-#include <cstddef>             // nullptr_t
-#include <algorithm>           // std::swap
+#include "radiant/Utility.h"                // rad::Move
+#include "radiant/Algorithm.h"              // rad::Swap
+#include "radiant/detail/StdTypeTraits.h"   // rad::IsConv
+#include <cstddef>                          // nullptr_t
 
 namespace rad
 {
@@ -55,7 +54,7 @@ public:
 
     /// @brief Constructs owning a raw pointer + optional custom deleter.
     explicit constexpr UniquePtr(pointer p, Deleter d = Deleter()) noexcept
-      : Deleter(std::move(d)),
+      : Deleter(rad::Move(d)),
         m_ptr(p)
     {}
 
@@ -63,13 +62,13 @@ public:
     template <class U, class E,
               rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
     constexpr UniquePtr(UniquePtr<U, E>&& o) noexcept
-      : Deleter(std::move(o.get_deleter())),
+      : Deleter(rad::Move(o.get_deleter())),
         m_ptr(o.release())
     {}
 
     /// @brief Move-constructs, stealing ownership
     constexpr UniquePtr(UniquePtr&& o) noexcept
-      : Deleter(std::move(o.get_deleter())),
+      : Deleter(rad::Move(o.get_deleter())),
         m_ptr(o.release())
     {
         o.m_ptr = nullptr;
@@ -94,7 +93,7 @@ public:
     UniquePtr& operator=(UniquePtr<U, E>&& o) noexcept
     {
         reset(o.release());
-        get_deleter() = std::move(o.get_deleter());
+        get_deleter() = rad::Move(o.get_deleter());
         return *this;
     }
 
@@ -105,7 +104,7 @@ public:
         {
             reset();
             m_ptr = o.m_ptr;
-            get_deleter() = std::move(o.get_deleter());
+            get_deleter() = rad::Move(o.get_deleter());
             o.m_ptr = nullptr;
         }
         return *this;
@@ -145,9 +144,9 @@ public:
     /// @brief Swap pointers and deleters with another UniquePtr
     void swap(UniquePtr& o) noexcept
     {
-        using rad::swap;
-        swap(m_ptr, o.m_ptr);
-        swap(get_deleter(), o.get_deleter());
+        using rad::Swap;
+        Swap(m_ptr, o.m_ptr);
+        Swap(get_deleter(), o.get_deleter());
     }
 
     /// @return reference to the stored deleter
