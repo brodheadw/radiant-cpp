@@ -12,8 +12,6 @@
 
 #pragma once
 
-#include "radiant/TotallyRad.h"
-#include "radiant/TypeTraits.h"
 #include "radiant/Utility.h"                // rad::Move
 #include "radiant/Algorithm.h"              // rad::Swap
 #include "radiant/detail/StdTypeTraits.h"   // rad::IsConv
@@ -27,7 +25,7 @@ template <typename T>
 struct DefaultDelete {
     constexpr DefaultDelete() noexcept = default;
 
-    // Allow DefaultDelete<Base> to be constructed from DefaultDelete<Derived>
+    /// @brief Allow DefaultDelete<Base> to be constructed from DefaultDelete<Derived>
     template <typename U,
               rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
     constexpr DefaultDelete(const DefaultDelete<U>&) noexcept {}
@@ -35,8 +33,8 @@ struct DefaultDelete {
     void operator()(T* p) const noexcept { delete p; }
 };
 
-// UniquePtr<T, Deleter> owns a T* and invokes Deleter when destroyed.
-// If Deleter is empty, sizeof(UniquePtr) == sizeof(T*).
+/// @brief UniquePtr<T, Deleter> owns a T* and invokes Deleter when destroyed.
+/// @details If Deleter is empty, sizeof(UniquePtr) == sizeof(T*).
 template <typename T, typename Deleter = DefaultDelete<T>>
 class UniquePtr : private Deleter
 {
