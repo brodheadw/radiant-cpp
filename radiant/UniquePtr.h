@@ -145,7 +145,7 @@ public:
     /// @brief Swap pointers and deleters with another UniquePtr
     void swap(UniquePtr& o) noexcept
     {
-        using std::swap;
+        using rad::swap;
         swap(m_ptr, o.m_ptr);
         swap(get_deleter(), o.get_deleter());
     }
