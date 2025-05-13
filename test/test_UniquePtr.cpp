@@ -32,11 +32,32 @@ struct D {
 };
 int D::count = 0;
 
-TEST(UniquePtr, BasicLifetimeAndSize) {
-  // the default deleter is empty, so this must be one pointer in size
-  static_assert(sizeof(rad::UniquePtrDefault<Foo>) == sizeof(Foo*),
-                "UniquePtrDefault<Foo> must be one pointer");
+// custom deleter with state for get_deleter test
+struct D2 {
+  int state;
+  static int count;
+  D2(int s = 0) : state(s) {}
 
+  template<typename U>
+  void operator()(U* p) const noexcept {
+    ++count;
+    delete p;
+  }
+};
+int D2::count = 0;
+
+// Ensure empty deleters take no extra space
+static_assert(sizeof(rad::UniquePtrDefault<Foo>) == sizeof(Foo*),
+              "UniquePtrDefault<Foo> must be one pointer");
+static_assert(sizeof(rad::UniquePtr<int, D>) == sizeof(int*),
+              "UniquePtr with empty deleter must be one pointer");
+
+// Non-empty deleter size check
+struct NonEmpty { int x; void operator()(int*) noexcept {} };
+static_assert(sizeof(rad::UniquePtr<int, NonEmpty>) > sizeof(int*),
+              "UniquePtr with non-empty deleter must be larger than a pointer");
+
+TEST(UniquePtr, BasicLifetimeAndSize) {
   EXPECT_EQ(Foo::live, 0);
   {
     rad::UniquePtrDefault<Foo> p(new Foo{42});
@@ -44,11 +65,10 @@ TEST(UniquePtr, BasicLifetimeAndSize) {
     EXPECT_EQ(p->value, 42);
     EXPECT_EQ(Foo::live, 1);
   }
-  // destructor should have run
   EXPECT_EQ(Foo::live, 0);
 }
 
-TEST (UniquePtr, NullptrAssignment) {
+TEST(UniquePtr, NullptrAssignment) {
   rad::UniquePtrDefault<int> p(new int{3});
   EXPECT_TRUE(p);
   p = nullptr;
@@ -65,17 +85,14 @@ TEST(UniquePtr, ReleaseAndReset) {
   Foo* r = p.release();
   EXPECT_EQ(r, raw);
   EXPECT_FALSE(p);
-  // user must delete now:
   delete r;
   EXPECT_EQ(Foo::live, 0);
 
-  // reset to new object
   p.reset(new Foo{5});
   EXPECT_TRUE(p);
   EXPECT_EQ(p->value, 5);
   EXPECT_EQ(Foo::live, 1);
 
-  // reset to nullptr
   p.reset();
   EXPECT_FALSE(p);
   EXPECT_EQ(Foo::live, 0);
@@ -91,7 +108,6 @@ TEST(UniquePtr, MoveSemantics) {
   EXPECT_TRUE(b);
   EXPECT_EQ(b->value, 1);
 
-  // move-assign
   Foo::live = 1;
   rad::UniquePtrDefault<Foo> c;
   c = std::move(b);
@@ -99,7 +115,6 @@ TEST(UniquePtr, MoveSemantics) {
   EXPECT_TRUE(c);
   EXPECT_EQ(c->value, 1);
 
-  // cleanup
   c.reset();
   EXPECT_EQ(Foo::live, 0);
 }
@@ -130,13 +145,11 @@ TEST(UniquePtr, Swap) {
   EXPECT_EQ(x->value, 20);
   EXPECT_EQ(y->value, 10);
 
-  // ADL swap
   using std::swap;
   swap(x, y);
   EXPECT_EQ(x->value, 10);
   EXPECT_EQ(y->value, 20);
 
-  // cleanup
   x.reset();
   y.reset();
   EXPECT_EQ(Foo::live, 0);
@@ -146,7 +159,6 @@ TEST(UniquePtr, CustomDeleter) {
   D::count = 0;
   int* raw = new int(99);
 
-  // UniquePtr<int, D> uses our functor D
   rad::UniquePtr<int, D> p(raw, D());
   EXPECT_TRUE(p);
   EXPECT_EQ(*p, 99);
@@ -155,4 +167,111 @@ TEST(UniquePtr, CustomDeleter) {
   p.reset();
   EXPECT_FALSE(p);
   EXPECT_EQ(D::count, 1);
+}
+
+// Tests for allocator-based make_unique
+TEST(UniquePtr, MakeUniqueBasic) {
+  Foo::live = 0;
+  auto p = rad::make_unique<Foo>(55);
+  EXPECT_TRUE(p);
+  EXPECT_EQ(p->value, 55);
+  EXPECT_EQ(Foo::live, 1);
+  p.reset();
+  EXPECT_FALSE(p);
+  EXPECT_EQ(Foo::live, 0);
+}
+
+TEST(UniquePtr, MakeUniqueInt) {
+  auto pi = rad::make_unique<int>(7);
+  EXPECT_TRUE(pi);
+  EXPECT_EQ(*pi, 7);
+}
+
+// Test destructor invocation for custom deleter
+TEST(UniquePtr, CustomDeleterDestructor) {
+  D::count = 0;
+  {
+    int* raw = new int(111);
+    rad::UniquePtr<int, D> p(raw, D());
+    EXPECT_EQ(D::count, 0);
+  }
+  EXPECT_EQ(D::count, 1);
+}
+
+// Test get_deleter state for custom deleter with state
+TEST(UniquePtr, CustomDeleterState) {
+  D2::count = 0;
+  D2 d2{123};
+  rad::UniquePtr<int, D2> p(new int{8}, d2);
+  EXPECT_EQ(p.get_deleter().state, 123);
+  p.reset();
+  EXPECT_EQ(D2::count, 1);
+}
+
+// Test get() method
+TEST(UniquePtr, GetPointer) {
+  int* raw = new int{321};
+  rad::UniquePtr<int, D> p(raw, D());
+  EXPECT_EQ(p.get(), raw);
+  p.release();
+  delete raw;
+}
+
+// Self-move assignment safety
+TEST(UniquePtr, SelfMoveAssignment) {
+  Foo::live = 0;
+  auto u = rad::make_unique<Foo>(1);
+  EXPECT_TRUE(u);
+  EXPECT_EQ(Foo::live, 1);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wself-move"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wself-move"
+#endif
+  u = std::move(u);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+  EXPECT_TRUE(u);
+  EXPECT_EQ(Foo::live, 1);
+}
+
+// Converting move with custom deleter
+TEST(UniquePtr, ConvertingMoveCustomDeleter) {
+  D2::count = 0;
+  using UpDerived = rad::UniquePtr<Derived, D2>;
+  using UpBase    = rad::UniquePtr<Base, D2>;
+  UpDerived dptr(new Derived(), D2(42));
+  UpBase    bptr(std::move(dptr));
+  EXPECT_FALSE(dptr);
+  EXPECT_TRUE(bptr);
+  EXPECT_EQ(bptr.get_deleter().state, 42);
+  bptr.reset();
+  EXPECT_EQ(D2::count, 1);
+}
+
+// Dereference operator* returns reference
+TEST(UniquePtr, DereferenceReturnsReference) {
+  Foo::live = 0;
+  auto p = rad::make_unique<Foo>(99);
+  Foo& f = *p;
+  EXPECT_EQ(f.value, 99);
+  p.reset();
+  EXPECT_EQ(Foo::live, 0);
+}
+
+// Double reset is no-op
+TEST(UniquePtr, DoubleResetNoOp) {
+  Foo::live = 0;
+  auto p = rad::make_unique<Foo>(2);
+  EXPECT_EQ(Foo::live, 1);
+  p.reset();
+  EXPECT_FALSE(p);
+  EXPECT_EQ(Foo::live, 0);
+  p.reset();
+  EXPECT_EQ(Foo::live, 0);
 }

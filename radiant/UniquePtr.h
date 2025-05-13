@@ -10,96 +10,91 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// radiant/UniquePtr.h
 #pragma once
 
 #include "radiant/Utility.h"                // rad::Move
 #include "radiant/Algorithm.h"              // rad::Swap
-#include "radiant/detail/StdTypeTraits.h"   // rad::IsConv
-#include <cstddef>                          // nullptr_t
+#include "radiant/detail/StdTypeTraits.h"   // rad::IsConv, rad::EnIf
+#include "radiant/Memory.h"                 // AllocTraits
+#include <cstddef>                           // nullptr_t
 
-namespace rad
-{
+namespace rad {
 
-/// @brief Empty deleter type so it occupies no storage (EBO).
+/// @brief Default deleter using Radiant's StdAllocator (EBO if empty).
 template <typename T>
-struct DefaultDelete {
-    constexpr DefaultDelete() noexcept = default;
+struct DefaultDelete : private StdAllocator {
+    using allocator_type = StdAllocator;
+    using pointer        = T*;
 
-    /// @brief Allow DefaultDelete<Base> to be constructed from DefaultDelete<Derived>
+    // Default construct the allocator
+    constexpr DefaultDelete() noexcept = default;
+    // Construct from a given allocator instance
+    explicit constexpr DefaultDelete(const allocator_type& a) noexcept
+      : allocator_type(a)
+    {}
+
+    /// @brief Converting deleter: allow DefaultDelete<T> ← DefaultDelete<U> when U* → T*
     template <typename U,
               rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
     constexpr DefaultDelete(const DefaultDelete<U>&) noexcept {}
 
-    void operator()(T* p) const noexcept { delete p; }
+    void operator()(pointer p) const noexcept {
+        if (!p) return;
+        allocator_type alloc = get_allocator();
+        using Traits = AllocTraits<allocator_type>;
+        Traits::Destroy(alloc, p);
+        Traits::Free(  alloc, p, 1);
+    }
+
+    constexpr allocator_type&       get_allocator()       noexcept { return static_cast<allocator_type&>(*this); }
+    constexpr const allocator_type& get_allocator() const noexcept { return static_cast<const allocator_type&>(*this); }
 };
 
-/// @brief UniquePtr<T, Deleter> owns a T* and invokes Deleter when destroyed.
-/// @details If Deleter is empty, sizeof(UniquePtr) == sizeof(T*).
+/// @brief A unique ownership smart pointer with customizable deleter.
+/// If the deleter is empty (via EBO), sizeof(UniquePtr)==sizeof(T*).
 template <typename T, typename Deleter = DefaultDelete<T>>
-class UniquePtr : private Deleter
-{
+class UniquePtr : private Deleter {
 public:
     RAD_NOT_COPYABLE(UniquePtr);
 
     using pointer      = T*;
     using deleter_type = Deleter;
 
-    /// @brief Default constructs to nullptr.
-    constexpr UniquePtr() noexcept
-      : Deleter(),  // base subobject
-        m_ptr(nullptr)
-    {}
+    /// @brief Constructs null.
+    constexpr UniquePtr() noexcept = default;
 
-    /// @brief Constructs owning a raw pointer + optional custom deleter.
+    /// @brief Constructs owning p, with optional custom deleter d.
     explicit constexpr UniquePtr(pointer p, Deleter d = Deleter()) noexcept
-      : Deleter(rad::Move(d)),
-        m_ptr(p)
+      : Deleter(rad::Move(d)), m_ptr(p)
     {}
 
-    /// @brief  Constructs owning a raw pointer + optimal custom deleter.
-    template <class U, class E,
-              rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
-    constexpr UniquePtr(UniquePtr<U, E>&& o) noexcept
-      : Deleter(rad::Move(o.get_deleter())),
-        m_ptr(o.release())
-    {}
-
-    /// @brief Move-constructs, stealing ownership
+    /// @brief Move-constructs, stealing ownership.
     constexpr UniquePtr(UniquePtr&& o) noexcept
-      : Deleter(rad::Move(o.get_deleter())),
-        m_ptr(o.release())
-    {
-        o.m_ptr = nullptr;
-    }
-    
+      : Deleter(rad::Move(o.get_deleter())), m_ptr(o.release())
+    {}
+
+    /// @brief Converting move from UniquePtr<U> when U*→T*.
+    template <typename U, typename E,
+              rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
+    constexpr UniquePtr(UniquePtr<U,E>&& o) noexcept
+      : Deleter(rad::Move(o.get_deleter())), m_ptr(o.release())
+    {}
+
     /// @brief Destroys the managed object if non-null.
-    ~UniquePtr() noexcept
-    {
+    ~UniquePtr() noexcept {
         if (m_ptr) static_cast<Deleter&>(*this)(m_ptr);
     }
 
-    /// @brief nullptr-assignment (clears the pointer)
-    UniquePtr& operator=(std::nullptr_t) noexcept
-    {
+    /// @brief nullptr-assignment (clears the pointer).
+    UniquePtr& operator=(std::nullptr_t) noexcept {
         reset();
         return *this;
     }
 
-    /// @brief Assigns a raw pointer, deleting the current one.
-    template <class U, class E,
-              rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
-    UniquePtr& operator=(UniquePtr<U, E>&& o) noexcept
-    {
-        reset(o.release());
-        get_deleter() = rad::Move(o.get_deleter());
-        return *this;
-    }
-
     /// @brief Move-assigns, destroying current and stealing ownership.
-    UniquePtr& operator=(UniquePtr&& o) noexcept
-    {
-        if (this != &o)
-        {
+    UniquePtr& operator=(UniquePtr&& o) noexcept {
+        if (this != &o) {
             reset();
             m_ptr = o.m_ptr;
             get_deleter() = rad::Move(o.get_deleter());
@@ -108,62 +103,72 @@ public:
         return *this;
     }
 
-    // --- OBSERVERS ---
+    /// @brief Converting move-assign from UniquePtr<U> when U*→T*.
+    template <typename U, typename E,
+              rad::EnIf<rad::IsConv<U*, T*>, int> = 0>
+    UniquePtr& operator=(UniquePtr<U,E>&& o) noexcept {
+        reset(o.release());
+        get_deleter() = rad::Move(o.get_deleter());
+        return *this;
+    }
 
-    /// @return the stored pointer (may be nullptr)
-    constexpr pointer get() const noexcept { return m_ptr; }
+    /// @brief Implicit bool conversion: true if non-null.
+    constexpr operator bool() const noexcept { return m_ptr != nullptr; }
 
-    /// @return reference to *get()
-    constexpr T& operator*() const noexcept { return *m_ptr; }
-
-    /// @return get(), for pointer‐like syntax
+    /// @brief Observers
+    constexpr pointer get() const noexcept       { return m_ptr; }
+    constexpr T&     operator*() const noexcept  { return *m_ptr; }
     constexpr pointer operator->() const noexcept { return m_ptr; }
 
-    /// @return true if get() != nullptr
-    explicit constexpr operator bool() const noexcept { return m_ptr != nullptr; }
-
-    // --- MODIFIERS ---
-
-    /// @brief Release ownership without deleting; returns previous pointer.
-    pointer release() noexcept
-    {
+    /// @brief Release ownership without deletion.
+    pointer release() noexcept {
         pointer tmp = m_ptr;
         m_ptr = nullptr;
         return tmp;
     }
 
-    /// @brief Delete current and take new pointer p (default nullptr)
-    void reset(pointer p = nullptr) noexcept
-    {
+    /// @brief Delete current and take new pointer p (default nullptr).
+    void reset(pointer p = nullptr) noexcept {
         if (m_ptr) static_cast<Deleter&>(*this)(m_ptr);
         m_ptr = p;
     }
 
-    /// @brief Swap pointers and deleters with another UniquePtr
-    void swap(UniquePtr& o) noexcept
-    {
+    /// @brief Swap pointers and deleters.
+    void swap(UniquePtr& o) noexcept {
         using rad::Swap;
         Swap(m_ptr, o.m_ptr);
         Swap(get_deleter(), o.get_deleter());
     }
 
-    /// @return reference to the stored deleter
-    constexpr Deleter&       get_deleter() noexcept       { return static_cast<Deleter&>(*this); }
+    /// @brief Access the stored deleter.
+    constexpr Deleter&       get_deleter()       noexcept { return static_cast<Deleter&>(*this); }
     constexpr const Deleter& get_deleter() const noexcept { return static_cast<const Deleter&>(*this); }
 
 private:
-    pointer m_ptr;
+    pointer m_ptr = nullptr;
 };
 
-/// @brief ADL‐enabled swap overload
+/// @brief ADL swap overload.
 template <typename T, typename D>
-void swap(UniquePtr<T, D>& a, UniquePtr<T, D>& b) noexcept
-{
+void swap(UniquePtr<T,D>& a, UniquePtr<T,D>& b) noexcept {
     a.swap(b);
 }
 
-/// @brief Alias using default deleter
+/// @brief Alias using default deleter.
 template <typename T>
 using UniquePtrDefault = UniquePtr<T>;
+
+/// @brief Allocator-aware make_unique: allocates via AllocTraits, constructs, and returns UniquePtr.
+template <typename T, typename... Args>
+UniquePtr<T> make_unique(Args&&... args) {
+    using D = DefaultDelete<T>;
+    using A = typename D::allocator_type;
+    using Traits = AllocTraits<A>;
+
+    A alloc;
+    T* raw = Traits::template Alloc<T>(alloc, 1);
+    Traits::Construct(alloc, raw, rad::Forward<Args>(args)...);
+    return UniquePtr<T>(raw, D(alloc));
+}
 
 } // namespace rad
